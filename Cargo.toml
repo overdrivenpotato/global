@@ -1,8 +1,8 @@
 [package]
 name = "global"
-version = "0.1.0"
-description = "Global variables without macros."
+version = "0.1.1"
 license = "MIT"
 authors = ["Marko Mijalkovic <marko.mijalkovic97@gmail.com>"]
 
-[dependencies]
+description = "Global variables without macros."
+repository = "https://github.com/overdrivenpotato/global"
