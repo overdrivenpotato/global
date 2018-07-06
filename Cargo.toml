@@ -1,0 +1,8 @@
+[package]
+name = "global"
+version = "0.1.0"
+description = "Global variables without macros."
+license = "MIT"
+authors = ["Marko Mijalkovic <marko.mijalkovic97@gmail.com>"]
+
+[dependencies]
