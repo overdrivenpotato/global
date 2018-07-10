@@ -23,12 +23,16 @@
 //! assert_eq!(*VALUE.lock(), 100);
 //! ```
 
+extern crate once_nonstatic;
+
 use std::{
-    sync::{Arc, Mutex, MutexGuard, Once, ONCE_INIT},
+    sync::{Arc, Mutex, MutexGuard},
     ops::{Deref, DerefMut},
     cell::UnsafeCell,
     mem::ManuallyDrop,
 };
+
+use once_nonstatic::Once;
 
 /// A global value.
 ///
@@ -58,7 +62,7 @@ impl<T: Default> Global<T> {
     /// Ensure the inner value exists.
     ///
     /// This method *must* be called when accessing the inner `UnsafeCell`.
-    fn ensure_exists(&'static self) {
+    fn ensure_exists(&self) {
         self.once.call_once(|| {
             let ptr = self.inner.get();
 
@@ -81,7 +85,7 @@ impl<T: Default + Send + 'static> Global<T> {
     /// this is not intended to be visible. Once `const fn` is stabilized, this
     /// will become a `const fn`.
     pub const INIT: Global<T> = Global {
-        once: ONCE_INIT,
+        once: Once::INIT,
         inner: UnsafeCell::new(None),
     };
 
@@ -91,7 +95,7 @@ impl<T: Default + Send + 'static> Global<T> {
     /// called.
     ///
     /// [`lock`]: #method.lock
-    pub fn with<F, R>(&'static self, f: F) -> R
+    pub fn with<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&mut T) -> R,
     {
@@ -102,7 +106,7 @@ impl<T: Default + Send + 'static> Global<T> {
     ///
     /// This method will block the current thread until any other lock held is
     /// destroyed.
-    pub fn lock(&'static self) -> GlobalGuard<T> {
+    pub fn lock(&self) -> GlobalGuard<T> {
         // Important: this *must* be called before accessing the inner pointer.
         self.ensure_exists();
 
@@ -232,7 +236,7 @@ mod test {
             // Go.
             tx.send(()).unwrap();
 
-            thread::sleep(Duration::new(0, 1000000));
+            thread::sleep(Duration::new(0, 1_000_000));
 
             *lock += 1;
         });
