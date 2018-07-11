@@ -89,6 +89,16 @@ impl<T: Default + Send + 'static> Global<T> {
         inner: UnsafeCell::new(None),
     };
 
+    /// A non-constant version of `Global::INIT`.
+    ///
+    /// Prefer the constant value where possible.
+    pub fn new() -> Self {
+        Self {
+            once: Once::INIT,
+            inner: UnsafeCell::new(None),
+        }
+    }
+
     /// Run a closure on the inner value.
     ///
     /// This will return the closure's return type. Internally, [`lock`] is
