@@ -5,7 +5,7 @@
 //! use global::Global;
 //!
 //! // The global value.
-//! static VALUE: Global<i32> = Global::INIT;
+//! static VALUE: Global<i32> = Global::new();
 //!
 //! // Spawn 100 threads and join them all.
 //! let mut threads = Vec::new();
@@ -35,9 +35,9 @@ use std::{
     mem::ManuallyDrop,
 };
 
-use parking_lot::{Once, ONCE_INIT, ReentrantMutex, ReentrantMutexGuard};
+use parking_lot::{Once, ReentrantMutex, ReentrantMutexGuard};
 
-/// A failure occured while borrowing the global value.
+/// A failure occured while borrowing a `Global<T>` value.
 ///
 /// This happens when the value is incorrectly borrowed twice within a single
 /// thread. While cross-thread locking will simply block until the value is
@@ -62,9 +62,9 @@ impl fmt::Display for BorrowFail {
 impl Error for BorrowFail {}
 
 /// A value slot stored inside of `Global<T>`.
-type InnerPointer<T> = Option<Arc<ReentrantMutex<RefCell<T>>>>;
+type InnerPointer<T> = Arc<ReentrantMutex<RefCell<T>>>;
 
-/// A global value.
+/// A mutable global value.
 ///
 /// All types wrapped in `Global` must implement [`Default`]. This gives the
 /// initial value of the global variable.
@@ -73,10 +73,7 @@ type InnerPointer<T> = Option<Arc<ReentrantMutex<RefCell<T>>>>;
 /// `Global::lock_mut` methods.
 ///
 /// [`Default`]: https://doc.rust-lang.org/std/default/trait.Default.html
-pub struct Global<T> {
-    once: Once,
-    inner: UnsafeCell<InnerPointer<T>>,
-}
+pub struct Global<T>(Immutable<InnerPointer<T>>);
 
 // The inner value is only used to make an immutable call to `.clone()`. The
 // only time it is mutated is within the `Once` guard. This means all threads
@@ -89,47 +86,14 @@ pub struct Global<T> {
 // ensure this bound is satisfied.
 unsafe impl<T> Sync for Global<T> where T: Send {}
 
-impl<T: Default> Global<T> {
-    /// Ensure the inner value exists.
-    ///
-    /// This method *must* be called when accessing the inner `UnsafeCell`.
-    fn ensure_exists(&self) {
-        self.once.call_once(|| {
-            let ptr = self.inner.get();
-
-            // This is safe as this assignment can only be called once, hence no
-            // hint of race conditions. Other threads will be blocked until this
-            // is done.
-            unsafe {
-                if (*ptr).is_none() {
-                    *ptr = Some(Default::default())
-                }
-            }
-        });
+impl<T> Global<T> {
+    /// Construct a new instance of self.
+    pub const fn new() -> Self {
+        Self(Immutable::new())
     }
 }
 
 impl<T: Default + Send + 'static> Global<T> {
-    /// The initial global value.
-    ///
-    /// The docs here will show you the internals of `Global::INIT`, however
-    /// this is not intended to be visible. Once `const fn` is stabilized, this
-    /// will become a `const fn`.
-    pub const INIT: Global<T> = Global {
-        once: ONCE_INIT,
-        inner: UnsafeCell::new(None),
-    };
-
-    /// A non-constant version of `Global::INIT`.
-    ///
-    /// Prefer the constant value where possible.
-    pub fn new() -> Self {
-        Self {
-            once: ONCE_INIT,
-            inner: UnsafeCell::new(None),
-        }
-    }
-
     /// Run a closure on an immutable reference to the inner value.
     ///
     /// This will return the closure's return type. Internally, [`lock`] is
@@ -180,15 +144,7 @@ impl<T: Default + Send + 'static> Global<T> {
         // and then a `Drop` implementation manually drops the fields in the
         // correct order.
 
-        // Important: this *must* be called before accessing the inner pointer.
-        self.ensure_exists();
-
-        // Extra cast to `*const` here is to force us to only use this as a read
-        // pointer.
-        let ptr = self.inner.get() as *const InnerPointer<T>;
-
-        // This is safe as we already called `ensure_exists`.
-        let mutex: Arc<_> = unsafe { (*ptr).clone() }.unwrap();
+        let mutex: Arc<_> = Arc::clone(&*self.0);
         let mutex_ptr = &*mutex as *const ReentrantMutex<RefCell<T>>;
 
         let mutex_guard = unsafe { (*mutex_ptr).lock() };
@@ -215,11 +171,8 @@ impl<T: Default + Send + 'static> Global<T> {
     pub fn lock_mut(&self) -> Result<GlobalGuardMut<T>, BorrowFail> {
         // The body here is largely the same as `lock`. Comments there explain
         // what is going on.
-        self.ensure_exists();
 
-        let ptr = self.inner.get() as *const InnerPointer<T>;
-
-        let mutex: Arc<_> = unsafe { (*ptr).clone() }.unwrap();
+        let mutex: Arc<_> = Arc::clone(&*self.0);
         let mutex_ptr = &*mutex as *const ReentrantMutex<RefCell<T>>;
 
         let mutex_guard = unsafe { (*mutex_ptr).lock() };
@@ -239,14 +192,14 @@ impl<T: Default + Send + 'static> Global<T> {
     }
 }
 
-/// A mutable handle to some global value.
+/// A mutable handle to some `Global<T>` value.
 ///
 /// This type implements `Deref<Target = T>` and `DerefMut`. Once this guard is
 /// dropped, the global this guard is locking is immediately unlocked.
 ///
 /// ```
 /// # use global::Global;
-/// static VALUE: Global<i32> = Global::INIT;
+/// static VALUE: Global<i32> = Global::new();
 ///
 /// let mut guard = VALUE.lock_mut().unwrap();
 ///
@@ -290,14 +243,14 @@ impl<T: 'static> DerefMut for GlobalGuardMut<T> {
     }
 }
 
-/// An immutable handle to some global value.
+/// An immutable handle to some `Global<T>` value.
 ///
 /// This type implements `Deref<Target = T>`. Once this guard is dropped, the
 /// global this guard is locking is immediately unlocked.
 ///
 /// ```
 /// # use global::Global;
-/// static VALUE: Global<i32> = Global::INIT;
+/// static VALUE: Global<i32> = Global::new();
 ///
 /// assert_eq!(0, *VALUE.lock().unwrap());
 /// ```
@@ -329,6 +282,66 @@ impl<T: 'static> Deref for GlobalGuard<T> {
     }
 }
 
+/// An immutable global value.
+///
+/// All types wrapped in `Immutable` must implement [`Default`]. This gives the
+/// initial value of the global variable.
+///
+/// This type can be directly dereferenced. Initialization occurs upon the
+/// first dereference.
+///
+/// [`Default`]: https://doc.rust-lang.org/std/default/trait.Default.html
+pub struct Immutable<T> {
+    once: Once,
+    inner: UnsafeCell<Option<T>>,
+}
+
+unsafe impl<T: Send> Send for Immutable<T> {}
+unsafe impl<T: Sync> Sync for Immutable<T> {}
+
+impl<T: Default> Immutable<T> {
+    /// Ensure the inner value exists.
+    ///
+    /// This method *must* be called before accessing the inner `UnsafeCell`.
+    fn ensure_exists(&self) {
+        self.once.call_once(|| {
+            let ptr = self.inner.get();
+
+            // This is safe as this assignment can only be called once, hence no
+            // hint of race conditions. Other threads will be blocked until this
+            // is done.
+            unsafe {
+                if (*ptr).is_none() {
+                    *ptr = Some(Default::default())
+                }
+            }
+        });
+    }
+}
+
+impl<T> Immutable<T> {
+    /// The initial global value.
+    pub const fn new() -> Self {
+        Self {
+            once: Once::new(),
+            inner: UnsafeCell::new(None),
+        }
+    }
+}
+
+impl<T: Send + Sync + Default + 'static> Deref for Immutable<T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        self.ensure_exists();
+
+        // Unwrap cannot panic, we called `ensure_exists`.
+        unsafe {
+            (*self.inner.get()).as_ref().unwrap()
+        }
+    }
+}
+
 #[cfg(test)]
 mod test {
     use std::{
@@ -341,7 +354,7 @@ mod test {
 
     #[test]
     fn no_race_condition() {
-        static NUM: Global<i32> = Global::INIT;
+        static NUM: Global<i32> = Global::new();
 
         let mut v = Vec::new();
 
@@ -363,7 +376,7 @@ mod test {
     // Ensure a lock will block.
     #[test]
     fn no_race_extended_lock() {
-        static NUM: Global<i32> = Global::INIT;
+        static NUM: Global<i32> = Global::new();
 
         let (tx, rx) = mpsc::channel();
 
@@ -394,7 +407,7 @@ mod test {
     #[test]
     #[should_panic]
     fn borrow_immutably_while_mutably_borrowed() {
-        static NUM: Global<i32> = Global::INIT;
+        static NUM: Global<i32> = Global::new();
 
         let _x = NUM.lock_mut().unwrap();
         let _y = NUM.lock().unwrap();
@@ -403,7 +416,7 @@ mod test {
     #[test]
     #[should_panic]
     fn borrow_mutably_while_mutably_borrowed() {
-        static NUM: Global<i32> = Global::INIT;
+        static NUM: Global<i32> = Global::new();
 
         let _x = NUM.lock_mut().unwrap();
         let _y = NUM.lock_mut().unwrap();
@@ -412,7 +425,7 @@ mod test {
     #[test]
     #[should_panic]
     fn borrow_mutably_while_immutably_borrowed() {
-        static NUM: Global<i32> = Global::INIT;
+        static NUM: Global<i32> = Global::new();
 
         let _x = NUM.lock().unwrap();
         let _y = NUM.lock_mut().unwrap();
@@ -420,7 +433,7 @@ mod test {
 
     #[test]
     fn borrow_immutably_while_immutably_borrowed() {
-        static NUM: Global<i32> = Global::INIT;
+        static NUM: Global<i32> = Global::new();
 
         let _x = NUM.lock().unwrap();
         let _y = NUM.lock().unwrap();
@@ -429,7 +442,7 @@ mod test {
     /// Test recursive immutable locking with two interleaved threads.
     #[test]
     fn complex_thread_interactions() {
-        static NUM: Global<i32> = Global::INIT;
+        static NUM: Global<i32> = Global::new();
 
         let lock1 = NUM.lock().unwrap();
         let lock2 = NUM.lock().unwrap();
