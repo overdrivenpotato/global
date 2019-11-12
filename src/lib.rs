@@ -344,7 +344,6 @@ mod test {
     };
 
     use super::{Immutable, Global};
-    extern crate test;
 
     #[test]
     fn no_race_condition() {
@@ -461,17 +460,5 @@ mod test {
         t.join().unwrap();
 
         assert_eq!(2, *NUM.lock().unwrap());
-    }
-
-    #[bench]
-    fn benchmark_immutable(b: &mut test::Bencher) {
-        b.iter(|| {
-            let n = test::black_box(1_000_000);
-            (0..n).for_each(|_| {
-                static N: Immutable<i32> = Immutable::new();
-                &*N;
-            });
-
-        });
     }
 }
