@@ -327,9 +327,10 @@ impl<T: Default> Deref for Immutable<T> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
-        // Unwrap cannot panic, we called `ensure_exists`.
         self.ensure_exists();
         unsafe {
+            // safe to deref this pointer as `ensure_exists()` prevents
+            // it from being null or dangling
             &*self.inner.as_ptr()
         }
     }
