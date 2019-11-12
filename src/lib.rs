@@ -343,7 +343,7 @@ mod test {
         time::Duration,
     };
 
-    use super::{Immutable, Global};
+    use super::Global;
 
     #[test]
     fn no_race_condition() {
