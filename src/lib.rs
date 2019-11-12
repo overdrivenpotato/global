@@ -1,3 +1,4 @@
+#![feature(test)]
 //! Type-level safe mutable global access, with support for recursive immutable
 //! locking.
 //!
@@ -350,7 +351,8 @@ mod test {
         time::Duration,
     };
 
-    use super::Global;
+    use super::{Immutable, Global};
+    extern crate test;
 
     #[test]
     fn no_race_condition() {
@@ -467,5 +469,17 @@ mod test {
         t.join().unwrap();
 
         assert_eq!(2, *NUM.lock().unwrap());
+    }
+
+    #[bench]
+    fn simple(b: &mut test::Bencher) {
+        b.iter(|| {
+            let n = test::black_box(1_000_000);
+            (0..n).for_each(|_| {
+                static N: Immutable<i32> = Immutable::new();
+                &*N;
+            });
+
+        });
     }
 }
