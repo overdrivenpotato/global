@@ -1,4 +1,4 @@
-#![feature(test)]
+#![feature(test, maybe_uninit_extra, maybe_uninit_ref)]
 //! Type-level safe mutable global access, with support for recursive immutable
 //! locking.
 //!
@@ -25,14 +25,12 @@
 //! assert_eq!(*VALUE.lock().unwrap(), 100);
 //! ```
 
-extern crate parking_lot;
-
 use std::{
     fmt,
     error::Error,
     sync::Arc,
     ops::{Deref, DerefMut},
-    cell::{self, UnsafeCell, RefCell},
+    cell::{self, RefCell},
     mem::ManuallyDrop,
 };
 
@@ -294,7 +292,7 @@ impl<T: 'static> Deref for GlobalGuard<T> {
 /// [`Default`]: https://doc.rust-lang.org/std/default/trait.Default.html
 pub struct Immutable<T> {
     once: Once,
-    inner: UnsafeCell<Option<T>>,
+    inner: std::mem::MaybeUninit<T>,
 }
 
 unsafe impl<T: Send> Send for Immutable<T> {}
@@ -306,15 +304,11 @@ impl<T: Default> Immutable<T> {
     /// This method *must* be called before accessing the inner `UnsafeCell`.
     fn ensure_exists(&self) {
         self.once.call_once(|| {
-            let ptr = self.inner.get();
-
             // This is safe as this assignment can only be called once, hence no
             // hint of race conditions. Other threads will be blocked until this
             // is done.
             unsafe {
-                if (*ptr).is_none() {
-                    *ptr = Some(Default::default())
-                }
+                (self.inner.as_ptr() as *mut T).write(T::default());
             }
         });
     }
@@ -325,20 +319,19 @@ impl<T> Immutable<T> {
     pub const fn new() -> Self {
         Self {
             once: Once::new(),
-            inner: UnsafeCell::new(None),
+            inner: std::mem::MaybeUninit::uninit()
         }
     }
 }
 
-impl<T: Send + Sync + Default + 'static> Deref for Immutable<T> {
+impl<T: Default> Deref for Immutable<T> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
-        self.ensure_exists();
-
         // Unwrap cannot panic, we called `ensure_exists`.
+        self.ensure_exists();
         unsafe {
-            (*self.inner.get()).as_ref().unwrap()
+            self.inner.get_ref()
         }
     }
 }
@@ -472,7 +465,7 @@ mod test {
     }
 
     #[bench]
-    fn simple(b: &mut test::Bencher) {
+    fn benchmark_immutable(b: &mut test::Bencher) {
         b.iter(|| {
             let n = test::black_box(1_000_000);
             (0..n).for_each(|_| {
