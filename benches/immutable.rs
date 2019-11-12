@@ -1,4 +1,4 @@
-use criterion::{black_box, criterion_group, criterion_main, Criterion, Throughput};
+use criterion::{black_box, Criterion, Throughput};
 use global::Immutable;
 use std::time::Duration;
 
