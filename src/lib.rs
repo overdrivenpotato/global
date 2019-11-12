@@ -1,4 +1,4 @@
-#![feature(test, maybe_uninit_extra, maybe_uninit_ref)]
+#![feature(test)]
 //! Type-level safe mutable global access, with support for recursive immutable
 //! locking.
 //!
@@ -331,7 +331,7 @@ impl<T: Default> Deref for Immutable<T> {
         // Unwrap cannot panic, we called `ensure_exists`.
         self.ensure_exists();
         unsafe {
-            self.inner.get_ref()
+            &*self.inner.as_ptr()
         }
     }
 }
