@@ -1,4 +1,3 @@
-#![feature(test)]
 //! Type-level safe mutable global access, with support for recursive immutable
 //! locking.
 //!
@@ -31,7 +30,7 @@ use std::{
     sync::Arc,
     ops::{Deref, DerefMut},
     cell::{self, RefCell},
-    mem::ManuallyDrop,
+    mem::{MaybeUninit, ManuallyDrop}
 };
 
 use parking_lot::{Once, ReentrantMutex, ReentrantMutexGuard};
@@ -292,7 +291,7 @@ impl<T: 'static> Deref for GlobalGuard<T> {
 /// [`Default`]: https://doc.rust-lang.org/std/default/trait.Default.html
 pub struct Immutable<T> {
     once: Once,
-    inner: std::mem::MaybeUninit<T>,
+    inner: MaybeUninit<T>,
 }
 
 unsafe impl<T: Send> Send for Immutable<T> {}
@@ -319,7 +318,7 @@ impl<T> Immutable<T> {
     pub const fn new() -> Self {
         Self {
             once: Once::new(),
-            inner: std::mem::MaybeUninit::uninit()
+            inner: MaybeUninit::uninit()
         }
     }
 }
