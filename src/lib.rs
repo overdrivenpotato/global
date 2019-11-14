@@ -29,7 +29,7 @@ use std::{
     error::Error,
     sync::Arc,
     ops::{Deref, DerefMut},
-    cell::{self, RefCell},
+    cell::{self, UnsafeCell, RefCell},
     mem::{MaybeUninit, ManuallyDrop}
 };
 
@@ -291,7 +291,7 @@ impl<T: 'static> Deref for GlobalGuard<T> {
 /// [`Default`]: https://doc.rust-lang.org/std/default/trait.Default.html
 pub struct Immutable<T> {
     once: Once,
-    inner: MaybeUninit<T>,
+    inner: MaybeUninit<UnsafeCell<T>>,
 }
 
 unsafe impl<T: Send> Send for Immutable<T> {}
@@ -307,7 +307,7 @@ impl<T: Default> Immutable<T> {
             // hint of race conditions. Other threads will be blocked until this
             // is done.
             unsafe {
-                (self.inner.as_ptr() as *mut T).write(T::default());
+                *(*self.inner.as_ptr()).get() = T::default();
             }
         });
     }
@@ -331,7 +331,7 @@ impl<T: Default> Deref for Immutable<T> {
         unsafe {
             // safe to deref this pointer as `ensure_exists()` prevents
             // it from being null or dangling
-            &*self.inner.as_ptr()
+            &*(*self.inner.as_ptr()).get()
         }
     }
 }
