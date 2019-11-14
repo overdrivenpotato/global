@@ -29,7 +29,7 @@ use std::{
     error::Error,
     sync::Arc,
     ops::{Deref, DerefMut},
-    cell::{self, RefCell},
+    cell::{self, UnsafeCell, RefCell},
     mem::{MaybeUninit, ManuallyDrop}
 };
 
@@ -293,7 +293,7 @@ impl<T: 'static> Deref for GlobalGuard<T> {
 /// [`Default`]: https://doc.rust-lang.org/std/default/trait.Default.html
 pub struct Immutable<T> {
     once: Once,
-    inner: MaybeUninit<T>,
+    inner: UnsafeCell<MaybeUninit<T>>,
 }
 
 impl<T> Drop for Immutable<T> {
@@ -303,7 +303,7 @@ impl<T> Drop for Immutable<T> {
             drop(unsafe {
                 // The `if` above makes sure that the inner value has been
                 // initialized.
-                std::ptr::drop_in_place(self.inner.as_mut_ptr());
+                std::ptr::drop_in_place((*self.inner.get()).as_mut_ptr());
             });
         }
     }
@@ -323,7 +323,7 @@ impl<T: Default> Immutable<T> {
             // hint of race conditions. Other threads will be blocked until this
             // is done.
             unsafe {
-                (self.inner.as_ptr() as *mut T).write(T::default());
+                *self.inner.get() = MaybeUninit::new(T::default());
             }
         });
     }
@@ -342,7 +342,7 @@ impl<T> Immutable<T> {
     pub const fn new() -> Self {
         Self {
             once: Once::new(),
-            inner: MaybeUninit::uninit(),
+            inner: UnsafeCell::new(MaybeUninit::uninit())
         }
     }
 }
@@ -355,7 +355,7 @@ impl<T: Default> Deref for Immutable<T> {
         unsafe {
             // safe to deref this pointer as `ensure_exists()` prevents
             // it from being null or dangling
-            &*self.inner.as_ptr()
+            (*self.inner.get()).as_ptr().as_ref().unwrap()
         }
     }
 }
