@@ -60,6 +60,7 @@ impl fmt::Display for BorrowFail {
 impl Error for BorrowFail {}
 
 /// A value slot stored inside of `Global<T>`.
+// TODO: Get rid of `Arc` with lifetimes.
 type InnerPointer<T> = Arc<ReentrantMutex<RefCell<T>>>;
 
 /// A mutable global value.
@@ -73,16 +74,9 @@ type InnerPointer<T> = Arc<ReentrantMutex<RefCell<T>>>;
 /// [`Default`]: https://doc.rust-lang.org/std/default/trait.Default.html
 pub struct Global<T>(Immutable<InnerPointer<T>>);
 
-// The inner value is only used to make an immutable call to `.clone()`. The
-// only time it is mutated is within the `Once` guard. This means all threads
-// will attempt to get *immutable* access and block until only one thread as
-// succeeded. That makes this `impl` safe only if `.ensure_exists()` is called
-// whenever accessing the inner `UnsafeCell` value.
-//
-// This bound is on `T: Send` as `Mutex<T>` requires it to implement `Sync`.
-// Because the mutex is in a static position it must be sync, so we need to
-// ensure this bound is satisfied.
-unsafe impl<T> Sync for Global<T> where T: Send {}
+// Not strictly required, but makes error messages simpler for users.
+unsafe impl<T: Send> Sync for Global<T> {}
+unsafe impl<T: Send> Send for Global<T> {}
 
 impl<T> Global<T> {
     /// Construct a new instance of self.
@@ -91,7 +85,7 @@ impl<T> Global<T> {
     }
 }
 
-impl<T: Default + Send + 'static> Global<T> {
+impl<T: Default + 'static> Global<T> {
     /// Run a closure on an immutable reference to the inner value.
     ///
     /// This will return the closure's return type. Internally, [`lock`] is
@@ -128,7 +122,7 @@ impl<T: Default + Send + 'static> Global<T> {
         f(&mut *self.lock_mut().expect("Couldn't mutably access global variable"))
     }
 
-    /// Obtain a lock providing an immutable reference to the inner value0.
+    /// Obtain a lock providing an immutable reference to the inner value.
     ///
     /// This method will block the current thread until any other threads
     /// holding a lock are destroyed. If the current thread already has mutable
@@ -161,7 +155,7 @@ impl<T: Default + Send + 'static> Global<T> {
         })
     }
 
-    /// Obtain a lock providing a mutable reference to the inner value0.
+    /// Obtain a lock providing a mutable reference to the inner value.
     ///
     /// This method will block the current thread until any other threads
     /// holding a lock are destroyed. If the current thread already has access,
@@ -187,6 +181,14 @@ impl<T: Default + Send + 'static> Global<T> {
             mutex_guard: ManuallyDrop::new(mutex_guard),
             ref_cell_guard: ManuallyDrop::new(ref_cell_guard),
         })
+    }
+
+    /// Force the inner value to be initialized.
+    ///
+    /// This will only initialize the value if it has not already been
+    /// initialized.
+    pub fn force_init(&self) {
+        self.0.ensure_exists();
     }
 }
 
@@ -294,13 +296,27 @@ pub struct Immutable<T> {
     inner: MaybeUninit<T>,
 }
 
+impl<T> Drop for Immutable<T> {
+    fn drop(&mut self) {
+        // Can only be `New` or `Done` as we have an `&mut self` param.
+        if let parking_lot::OnceState::Done = self.once.state() {
+            drop(unsafe {
+                // The `if` above makes sure that the inner value has been
+                // initialized.
+                std::ptr::drop_in_place(self.inner.as_mut_ptr());
+            });
+        }
+    }
+}
+
+// Not strictly required, but makes error messages simpler for users.
 unsafe impl<T: Send> Send for Immutable<T> {}
 unsafe impl<T: Sync> Sync for Immutable<T> {}
 
 impl<T: Default> Immutable<T> {
     /// Ensure the inner value exists.
     ///
-    /// This method *must* be called before accessing the inner `UnsafeCell`.
+    /// This method *must* be called before accessing the inner `MaybeUninit`.
     fn ensure_exists(&self) {
         self.once.call_once(|| {
             // This is safe as this assignment can only be called once, hence no
@@ -311,6 +327,14 @@ impl<T: Default> Immutable<T> {
             }
         });
     }
+
+    /// Force the inner value to be initialized.
+    ///
+    /// This will only initialize the value if it has not already been
+    /// initialized.
+    pub fn force_init(&self) {
+        self.ensure_exists();
+    }
 }
 
 impl<T> Immutable<T> {
@@ -318,7 +342,7 @@ impl<T> Immutable<T> {
     pub const fn new() -> Self {
         Self {
             once: Once::new(),
-            inner: MaybeUninit::uninit()
+            inner: MaybeUninit::uninit(),
         }
     }
 }
@@ -344,7 +368,7 @@ mod test {
         time::Duration,
     };
 
-    use super::Global;
+    use super::{Global, Immutable};
 
     #[test]
     fn no_race_condition() {
@@ -461,5 +485,39 @@ mod test {
         t.join().unwrap();
 
         assert_eq!(2, *NUM.lock().unwrap());
+    }
+
+    #[test]
+    fn ensure_drop() {
+        static mut COUNTER: u32 = 0;
+
+        #[derive(Default)]
+        struct Increase;
+
+        impl Drop for Increase {
+            fn drop(&mut self) {
+                unsafe { COUNTER += 1; }
+            }
+        }
+
+        // First test it without initalization.
+        let immutable = Immutable::<Increase>::new();
+        drop(immutable);
+        assert_eq!(unsafe { COUNTER }, 0);
+
+        let global = Global::<Increase>::new();
+        drop(global);
+        assert_eq!(unsafe { COUNTER }, 0);
+
+        // Now test it with initalization.
+        let immutable = Immutable::<Increase>::new();
+        immutable.force_init();
+        drop(immutable);
+        assert_eq!(unsafe { COUNTER }, 1);
+
+        let global = Global::<Increase>::new();
+        global.force_init();
+        drop(global);
+        assert_eq!(unsafe { COUNTER }, 2);
     }
 }
