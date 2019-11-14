@@ -1,6 +1,6 @@
 [package]
 name = "global"
-version = "0.4.2"
+version = "0.4.3"
 license = "MIT"
 authors = ["Marko Mijalkovic <marko.mijalkovic97@gmail.com>"]
 

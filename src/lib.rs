@@ -342,7 +342,7 @@ impl<T> Immutable<T> {
     pub const fn new() -> Self {
         Self {
             once: Once::new(),
-            inner: UnsafeCell::new(MaybeUninit::uninit())
+            inner: UnsafeCell::new(MaybeUninit::uninit()),
         }
     }
 }
@@ -355,7 +355,7 @@ impl<T: Default> Deref for Immutable<T> {
         unsafe {
             // safe to deref this pointer as `ensure_exists()` prevents
             // it from being null or dangling
-            (*self.inner.get()).as_ptr().as_ref().unwrap()
+            &*(*self.inner.get()).as_ptr()
         }
     }
 }
